@@ -2,17 +2,11 @@ package bguspl.set.ex;
 
 import bguspl.set.Env;
 
-import java.io.InterruptedIOException;
-import java.lang.ProcessBuilder.Redirect.Type;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.Semaphore;
+import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.logging.Level;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import java.util.logging.Level;
-
-import javax.naming.InterruptedNamingException;
 
 /**
  * This class manages the dealer's threads and data
@@ -40,6 +34,8 @@ public class Dealer implements Runnable {
      */
     private volatile boolean terminate;
 
+    private final int TIMER_OFFSET = 1500;
+
     /**
      * The time when the dealer needs to reshuffle the deck due to turn timeout.
      */
@@ -47,19 +43,35 @@ public class Dealer implements Runnable {
 
     private long milliseconds;
 
-    private final long MINUTE = 5000;
+    public final long turnTimeout;
+
+    public static final long SECOND = 1000;
 
     private Thread dealerThread;
 
-    private Semaphore lock = new Semaphore(1, true);
+    private final ArrayBlockingQueue<Integer> submissionQ;
+
+    public final int SET_SIZE;
+
+    public ArrayBlockingQueue<Integer> getSubmissionQ() {
+        return submissionQ;
+    }
+
+    public int getSET_SIZE() {
+        return SET_SIZE;
+    }
 
     public Dealer(Env env, Table table, Player[] players) {
         this.env = env;
         this.table = table;
         this.players = players;
         deck = IntStream.range(0, env.config.deckSize).boxed().collect(Collectors.toList());
-        reshuffleTime = System.currentTimeMillis() + MINUTE;
-        milliseconds = MINUTE;
+        turnTimeout = env.config.turnTimeoutMillis;
+        SET_SIZE = env.config.featureSize;
+        reshuffleTime = System.currentTimeMillis() + turnTimeout;
+        milliseconds = turnTimeout;
+        submissionQ = new ArrayBlockingQueue<>(1000);
+        
     }
 
     /**
@@ -68,7 +80,6 @@ public class Dealer implements Runnable {
     @Override
     public void run() {
         dealerThread = Thread.currentThread();
-        System.out.printf("Info: Thread %s starting.%n", Thread.currentThread().getName());
         env.logger.log(Level.INFO, "Thread " + Thread.currentThread().getName() + " starting.");
         for (Player player : players) {
             Thread pThread = new Thread(player, "player" + player.getId());
@@ -81,27 +92,25 @@ public class Dealer implements Runnable {
             updateTimerDisplay(false);
             removeAllCardsFromTable();
         }
+        terminate();
         announceWinners();
                
-        System.out.printf("Info: Thread %s terminated.%n", Thread.currentThread().getName());
+        // System.out.printf("Info: Thread %s terminated.%n", Thread.currentThread().getName());
     
         }
 
     /**
      * The inner loop of the dealer thread that runs as long as the countdown did not time out.
      */
+    long lastSecond;
     private void timerLoop() {
-        while (!terminate && System.currentTimeMillis() < reshuffleTime + 1500) { // set reshuffleTime = 60sec
-            long lastSecond = System.currentTimeMillis();
-            //IMPROVE TIMER
-            if(milliseconds != MINUTE) {
+        while (!terminate && System.currentTimeMillis() < reshuffleTime + TIMER_OFFSET) { // set reshuffleTime = 60sec
+            if(milliseconds != turnTimeout) {
                 sleepUntilWokenOrTimeout();
             }
-            if(milliseconds == MINUTE || (System.currentTimeMillis() - lastSecond)/1000 == 1) //checks if 1 second passed, updates only if it did
+            if(milliseconds == turnTimeout || (System.currentTimeMillis() - lastSecond)/1000 == 1) //checks if 1 second passed, updates only if it did
                 updateTimerDisplay(false);
             if(milliseconds < 0) {break;}
-            removeCardsFromTable();
-            placeCardsOnTable();
         }
     }
 
@@ -109,11 +118,8 @@ public class Dealer implements Runnable {
      * Called when the game should be terminated due to an external event.
      */
     public void terminate() {
-        // TODO implement
-        //interrput!
         terminate = true;
         Arrays.stream(players).forEach(Player::terminate);
-        //for every player: player.terminate = true;
     }
 
     /**
@@ -128,53 +134,70 @@ public class Dealer implements Runnable {
     /**
      * Checks if any cards should be removed from the table and returns them to the deck.
      */
-    private void removeCardsFromTable() {
-        // TODO implement
+    private void removeCardsFromTable(int[] cardsToRemove) {
+        for (int j : cardsToRemove) {
+            table.removeCardsFromTable(j, players);
+        }
+
     }
 
     /**
      * Check if any cards can be removed from the deck and placed on the table.
      */
     private void placeCardsOnTable() {
-        // TODO implement
-        /*
-         * reshuffle
-         *  while(deck > 0 & numOfCardsToPlace >0)
-         *  insert to one of the empty slots the last card in the deck
-         *  table.placeCard(int card, int slot)
-         */
-
         Collections.shuffle(deck);
         Integer[] slotToCard = table.getSlotToCard();
-        //MAGIC NUMBER - 11
-        List<Integer> li = IntStream.rangeClosed(0, 11).boxed().collect(Collectors.toList());
+        List<Integer> li = IntStream.rangeClosed(0, env.config.tableSize - 1).boxed().collect(Collectors.toList());
         Collections.shuffle(li);
         for(int slotNum = 0; slotNum < li.size() && deck.size() > 0; slotNum++) {
             if(slotToCard[li.get(slotNum)] == null) {
-                //remove last card from deck
                 Integer cardNum = deck.remove(deck.size() - 1);
-                // table.placeCard(int card,int slot)
                 table.placeCard(cardNum, li.get(slotNum));
                 try{
-                    //MAGIC NUMBER - 200
                     Thread.currentThread().sleep(env.config.tableDelayMillis);
-                } catch(InterruptedException ex) {}
+                } catch(InterruptedException ignored) {}
             }
         }
-        reshuffleTime = System.currentTimeMillis() + MINUTE;
+        Arrays.stream(players).forEach(p -> p.setAllowedTokens(true));
+        reshuffleTime = System.currentTimeMillis() + turnTimeout;
+        lastSecond = System.currentTimeMillis(); 
     }
 
     /**
      * Sleep for a fixed amount of time or until the thread is awakened for some purpose.
      */
-    private void sleepUntilWokenOrTimeout() {
-        // TODO implement
+    private synchronized void sleepUntilWokenOrTimeout() {
         try {
-            Thread.currentThread().sleep(1000);
-        } catch(InterruptedException ex){
-            //handle interrput (check set...)
-            System.out.println("info: got interrupted"); //remove latar
-            env.logger.log(Level.INFO, "Thread " + Thread.currentThread().getName() + " terminated.");
+            wait(SECOND);
+            handleSubmittedSet();
+        } catch(InterruptedException ignored){} 
+    }
+
+    private void handleSubmittedSet() {
+        while(submissionQ.size() != 0) {
+            int playerSubmittedSet = submissionQ.remove();
+            Integer[] setTokens = table.playerSetTokens(playerSubmittedSet);
+            long numOfActualTokens = Arrays.stream(setTokens).filter(Objects::nonNull).count();
+            Player player = players[playerSubmittedSet];
+            if(numOfActualTokens == SET_SIZE) {
+                int[] setTokensConverted = new int[SET_SIZE];
+                for(int i = 0; i < SET_SIZE; i++) {
+                    setTokensConverted[i] = (int)setTokens[i];
+                }
+                boolean isValidSet = env.util.testSet(setTokensConverted);
+                if(isValidSet) {
+                    removeCardsFromTable(setTokensConverted);
+                    placeCardsOnTable();
+                    player.point();
+                    player.handleFreeze(env.config.pointFreezeMillis);
+                    updateTimerDisplay(true);
+                } else {
+                    player.setTokensPlaced((int)numOfActualTokens);
+                    player.handleFreeze(env.config.penaltyFreezeMillis);
+                }    
+            } else {
+                player.handleFreeze(0);
+            }
         }
     }
 
@@ -182,16 +205,14 @@ public class Dealer implements Runnable {
      * Reset and/or update the countdown and the countdown display.
      */
     private void updateTimerDisplay(boolean reset) {
-        // TODO implement
-        if(!reset) {
-            if(milliseconds >= 0) {
-                env.ui.setCountdown(milliseconds, false);
-
-                milliseconds -= 1000;
-            } else {
-                reshuffleTime = System.currentTimeMillis() + MINUTE;
-                milliseconds = MINUTE;
-            }
+        if((System.currentTimeMillis() - lastSecond)/SECOND == 1) {
+            lastSecond = System.currentTimeMillis(); }
+        if(reset || milliseconds < 0) {
+            reshuffleTime = System.currentTimeMillis() + turnTimeout;
+            milliseconds = turnTimeout;
+        } else if(milliseconds >= 0){
+            env.ui.setCountdown(milliseconds, false);
+            milliseconds -= SECOND;
         }
     }
 
@@ -200,39 +221,43 @@ public class Dealer implements Runnable {
      */
     private void removeAllCardsFromTable() {
         if(!terminate) {
-        // TODO implement
-        //remove from table - insert back to deck
-        //MAGIC NUMBER - 11
+            Arrays.stream(players).forEach(p -> p.setAllowedTokens(false));
             table.removeAllTokens();
             Arrays.stream(players).forEach(Player::removeAllTokens);
-            List<Integer> li = IntStream.rangeClosed(0, 11).boxed().collect(Collectors.toList());
+            List<Integer> li = IntStream.rangeClosed(0, env.config.tableSize - 1).boxed().collect(Collectors.toList());
             Collections.shuffle(li);
-            for(int i = 0; i < li.size(); i++) {
-                deck.add(table.getCardInSlot(li.get(i)));
-                table.removeCard(li.get(i));
-                try {
-                    Thread.currentThread().sleep(env.config.tableDelayMillis);
-                } catch(InterruptedException ex) {}
+            for (Integer integer : li) {
+                if (table.getCardInSlot(integer) != null) {
+                    deck.add(table.getCardInSlot(integer));
+                    table.removeCard(integer);
+                    try {
+                        Thread.currentThread().sleep(env.config.tableDelayMillis);
+                    } catch (InterruptedException ignored) {
+                    }
+                }
             }
+            submissionQ.clear();
         }
     }
 
     /**
      * Check who is/are the winner/s and displays them.
      */
-    private void announceWinners() {
-        // TODO implement
+     int announceWinners() {
+        Optional<Player> winner = Arrays.stream(players).max(Comparator.comparingInt(Player::score));
+        if (winner.isPresent()){
+            int score = winner.get().score();
+            int [] winners = Arrays.stream(players).filter(p -> p.score() == score).mapToInt( x -> x.id).toArray();
+            env.ui.announceWinner(winners);
+            return score;
+        }
+        return 0;
     }
 
     public void submitedSet(int playerIdSubmitted) {
-        boolean acquired = false;
-        try {
-            lock.acquire();
-            acquired = true;
-        } catch(InterruptedException ignored) {}
-        if(acquired) {
-            System.out.printf("Info: Thread %s submitted set.%n", Thread.currentThread().getName());
-            lock.release();
+        submissionQ.add(playerIdSubmitted);
+        synchronized(this) {
+            notifyAll();
         }
     }
 }

@@ -1,11 +1,10 @@
 package bguspl.set.ex;
 
-import java.util.ArrayDeque;
-import java.util.Queue;
+import bguspl.set.Env;
+
+import java.util.Random;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.logging.Level;
-
-import bguspl.set.Env;
 
 /**
  * This class manages the players' threads and data
@@ -56,9 +55,17 @@ public class Player implements Runnable {
     private int score;
 
     //private queue (capacity = 3) public function of push,pop,get size
-    private ArrayBlockingQueue<Integer> queue; 
+    private final ArrayBlockingQueue<Integer> queue;
 
     private int tokensPlaced;
+
+    private final Dealer dealer;
+
+    private volatile boolean allowedToPlaceTokens;
+
+    private long freezeMillis;
+
+    private final Random rnd;
 
 
     /**
@@ -75,8 +82,38 @@ public class Player implements Runnable {
         this.table = table;
         this.id = id;
         this.human = human;
-        queue = new ArrayBlockingQueue<>(3);
+        queue = new ArrayBlockingQueue<>(dealer.getSET_SIZE());
         tokensPlaced = 0;
+        this.dealer = dealer;
+        allowedToPlaceTokens = false;
+        freezeMillis = 0;
+        rnd = new Random();
+    }
+
+    public void setAllowedTokens(boolean toSet) {
+        allowedToPlaceTokens = toSet;
+    }
+
+    public int incrementScore() {
+        return ++score;
+    }
+
+    public void setTokensPlaced(int tokensPlaced) {
+        this.tokensPlaced = tokensPlaced;
+    }
+
+    public int getTokensPlaced() {
+        return tokensPlaced;
+    }
+
+    public void handleFreeze(long millis) {
+        freezeMillis = millis;
+        setAllowedTokens(false); 
+        if(human) {
+            playerThread.interrupt();
+        } else {
+            aiThread.interrupt();
+        }
     }
 
     /**
@@ -85,22 +122,20 @@ public class Player implements Runnable {
     @Override
     public void run() {
         playerThread = Thread.currentThread();
-        System.out.printf("Info: Thread %s starting.%n", Thread.currentThread().getName());
         env.logger.log(Level.INFO, "Thread " + Thread.currentThread().getName() + "starting.");
         if (!human) createArtificialIntelligence();
-
         while (!terminate) {
-            // TODO implement main player loop
-            /*
-             * if(table.countCards < rows*columns(=12))
-             *  wait until = 12
-             * else
-             *  wait until key press
-             */
+            synchronized(this) {
+                try {
+                    wait();
+                    if(human) {
+                        queuePop();
+                    }
+                } catch(InterruptedException ignored) {}
+            }
         }
         if (!human) try { aiThread.join(); } catch (InterruptedException ignored) {}
         env.logger.log(Level.INFO, "Thread " + Thread.currentThread().getName() + " terminated.");
-        System.out.printf("Info: Thread %s terminated.%n", Thread.currentThread().getName());
     }
 
     /**
@@ -111,24 +146,27 @@ public class Player implements Runnable {
         // note: this is a very very smart AI (!)
         aiThread = new Thread(() -> {
             env.logger.log(Level.INFO, "Thread " + Thread.currentThread().getName() + " starting.");
-            System.out.printf("Info: Thread %s starting.%n", Thread.currentThread().getName());
             while (!terminate) {
-                // TODO implement player key press simulator
-                try {
-                    synchronized (this) { wait(); }
-                } catch (InterruptedException ignored) {}
+                pickRandomSlot();
             }
-            System.out.printf("Info: Thread %s terminated.%n", Thread.currentThread().getName());
+            playerThread.interrupt();
             env.logger.log(Level.INFO, "Thread " + Thread.currentThread().getName() + " terminated.");
         }, "computer-" + id);
         aiThread.start();
+    }
+
+    private void pickRandomSlot() {
+        int slot = rnd.nextInt(env.config.tableSize);
+        if(allowedToPlaceTokens) {
+            queue.add(slot);
+            queuePop();
+        }
     }
 
     /**
      * Called when the game should be terminated due to an external event.
      */
     public void terminate() {
-        // TODO implement
         terminate = true;
     }
 
@@ -138,30 +176,43 @@ public class Player implements Runnable {
      * @param slot - the slot corresponding to the key pressed.
      */
     public void keyPressed(int slot) {
-        // TODO implement
-        //add to queue
-        //attempt to pop (and place token)
-        queue.add(slot);
-        queuePop();
+        if(human && allowedToPlaceTokens) {
+            queue.add(slot);
+            synchronized(this) {
+                notifyAll();
+            }
+        }
     }
 
     private void queuePop() {
-        Integer slotNum = queue.remove();
-        boolean tokenStateAtSlot = table.getPlayerTokenState(id, slotNum);
-        System.out.println("queuePop");
-        if(tokenStateAtSlot) {
-            tokensPlaced--; // should be synced
-            table.removeToken(id, slotNum);
-        }
-        else {
-            if(tokensPlaced < 3) {
-                tokensPlaced++;
-                table.placeToken(id, slotNum);
-                if(tokensPlaced == 3){
-                    //submit set to dealer
-                    System.out.println("placed 3");
+        Integer slotNum = queue.poll();
+        if(slotNum != null) {
+            boolean tokenStateAtSlot = table.getPlayerTokenState(id, slotNum);
+            if(tokenStateAtSlot) {
+                tokensPlaced--;
+                table.removeToken(id, slotNum);
+            }
+            else {
+                if(tokensPlaced < dealer.SET_SIZE) {
+                    placeToken(slotNum);
                 }
             }
+        }
+    }
+
+    void placeToken(int slotNum) {
+        tokensPlaced++;
+        table.placeToken(id, slotNum);
+        if(tokensPlaced == dealer.SET_SIZE){
+            try {
+                dealer.submitedSet(id);
+                if(human) {
+                    playerThread.sleep(dealer.turnTimeout);
+                } else {
+                    aiThread.sleep(dealer.turnTimeout);
+                }
+            } catch(InterruptedException ignored) {}
+            penalty();
         }
     }
 
@@ -172,20 +223,28 @@ public class Player implements Runnable {
      * @post - the player's score is updated in the ui.
      */
     public void point() {
-        // TODO implement
-
         int ignored = table.countCards(); // this part is just for demonstration in the unit tests
-        env.ui.setScore(id, ++score);
+        setTokensPlaced(0);
+        int scoreToUpdate = incrementScore();
+        env.ui.setScore(id, score);
     }
 
     /**
      * Penalize a player and perform other related actions.
      */
     public void penalty() {
-        // TODO implement
+        while(freezeMillis > 0) {
+            env.ui.setFreeze(id, freezeMillis);
+            try {
+                playerThread.sleep(Dealer.SECOND);
+            } catch (InterruptedException ignored) {}
+            freezeMillis -= Dealer.SECOND;
+        }
+        env.ui.setFreeze(id, freezeMillis);
+        setAllowedTokens(true);
     }
 
-    public int getScore() {
+    public int score() {
         return score;
     }
 

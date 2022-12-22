@@ -6,13 +6,18 @@ import bguspl.set.UserInterface;
 import bguspl.set.Util;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Properties;
+import java.util.Random;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@ExtendWith(MockitoExtension.class)
 class TableTest {
 
     Table table;
@@ -55,7 +60,7 @@ class TableTest {
         }
     }
 
-    private void placeSomeCardsAndAssert() {
+    private void placeSomeCardsAndAssert() throws InterruptedException {
         table.placeCard(8, 2);
 
         assertEquals(8, (int) slotToCard[2]);
@@ -83,19 +88,44 @@ class TableTest {
     }
 
     @Test
-    void placeCard_SomeSlotsAreFilled() {
+    void placeCard_SomeSlotsAreFilled() throws InterruptedException {
 
         fillSomeSlots();
         placeSomeCardsAndAssert();
     }
 
     @Test
-    void placeCard_AllSlotsAreFilled() {
+    void placeCard_AllSlotsAreFilled() throws InterruptedException {
         fillAllSlots();
         placeSomeCardsAndAssert();
     }
 
+    @Test
+    void removeCard(){
+        fillAllSlots();
+        Random rnd = new Random();
+        int slot = rnd.nextInt(4); // magic number
+
+        table.removeCard(slot);
+
+        Integer expected = null;
+
+        assertEquals(expected, slotToCard[slot]);
+    }
+    @Test
+    void placeToken(){
+        Random rnd = new Random();
+        int player = rnd.nextInt(2); // magic number
+        int slot = rnd.nextInt(4); // magic number
+
+        table.placeToken(player, slot);
+
+        assertTrue(table.getPlayerTokenState(player, slot));
+    }
+
     static class MockUserInterface implements UserInterface {
+        @Override
+        public void dispose() {}
         @Override
         public void placeCard(int card, int slot) {}
         @Override
@@ -118,7 +148,7 @@ class TableTest {
         public void removeToken(int player, int slot) {}
         @Override
         public void announceWinner(int[] players) {}
-    };
+    }
 
     static class MockUtil implements Util {
         @Override
@@ -140,6 +170,9 @@ class TableTest {
         public List<int[]> findSets(List<Integer> deck, int count) {
             return null;
         }
+
+        @Override
+        public void spin() {}
     }
 
     static class MockLogger extends Logger {
@@ -147,4 +180,6 @@ class TableTest {
             super("", null);
         }
     }
+
+
 }

@@ -29,7 +29,7 @@ public class Table {
      */
     protected final Integer[] cardToSlot; // slot per card (if any)
 
-    private boolean playersTokens[][];
+    private boolean[][] playersTokens;
     /**
      * Constructor for testing.
      *
@@ -104,7 +104,6 @@ public class Table {
         cardToSlot[card] = slot;
         slotToCard[slot] = card;
 
-        // TODO implement
         env.ui.placeCard(card,slot);
     }
 
@@ -119,9 +118,11 @@ public class Table {
 
         // TODO implement
         Integer card = slotToCard[slot];
-        slotToCard[slot] = null;
-        cardToSlot[card] = null;
-        env.ui.removeCard(slot);
+        if(card != null) {
+            slotToCard[slot] = null;
+            cardToSlot[card] = null;
+            env.ui.removeCard(slot);
+        }
     }
 
     /**
@@ -141,11 +142,19 @@ public class Table {
      * @param slot   - the slot from which to remove the token.
      * @return       - true iff a token was successfully removed.
      */
-    public boolean removeToken(int player, int slot) {
+    public void removeToken(int player, int slot) {
         // TODO implement
         playersTokens[player][slot] = false;
         env.ui.removeToken(player, slot);
-        return false;
+    }
+
+    public void removeToken(int slot, Player[] players) {
+        for(int i = 0; i < playersTokens.length; i++) {
+            if(playersTokens[i][slot]) {
+                players[i].setTokensPlaced(players[i].getTokensPlaced() - 1);
+            }
+            removeToken(i, slot);
+        }
     }
 
     public void removeAllTokens() {
@@ -153,5 +162,25 @@ public class Table {
         env.ui.removeTokens();
     }
 
+    public void removeCardsFromTable(int cardsToRemove, Player[] players) {
+        int slot = cardToSlot[cardsToRemove];
+        removeToken(slot, players);
+        removeCard(slot);
+    }
+
     public boolean getPlayerTokenState(int player, int slot) { return playersTokens[player][slot];}
+
+    public Integer[] playerSetTokens(int player) {
+        Integer[] tokensSlots = new Integer[3];
+        for(int i = 0, j = 0; i < playersTokens[player].length; i++) {
+            if(playersTokens[player][i]) {
+                try {
+                    tokensSlots[j] = slotToCard[i];
+                }catch (ArrayIndexOutOfBoundsException ignored){}
+                j++;
+            }
+        }
+        
+        return tokensSlots;
+    }
 }
