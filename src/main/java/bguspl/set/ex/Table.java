@@ -110,13 +110,15 @@ public class Table {
     /**
      * Removes a card from a grid slot on the table.
      * @param slot - the slot from which to remove the card.
+     *             0 <= slot
+     *             slot < 12
      */
     public void removeCard(int slot) {
         try {
             Thread.sleep(env.config.tableDelayMillis);
         } catch (InterruptedException ignored) {}
 
-        // TODO implement
+
         Integer card = slotToCard[slot];
         if(card != null) {
             slotToCard[slot] = null;
@@ -129,9 +131,10 @@ public class Table {
      * Places a player token on a grid slot.
      * @param player - the player the token belongs to.
      * @param slot   - the slot on which to place the token.
+     * @pre - playersTokens[player][slot] = false;
+     * @post - playersTokens[player][slot] = true;
      */
     public void placeToken(int player, int slot) {
-        // TODO implement
         playersTokens[player][slot] = true;
         env.ui.placeToken(player, slot);
     }

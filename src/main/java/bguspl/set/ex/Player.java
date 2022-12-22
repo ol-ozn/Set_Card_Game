@@ -200,6 +200,12 @@ public class Player implements Runnable {
         }
     }
 
+    /**
+     * Place the player's token on the slot
+     * @param slotNum - the slot corresponding to place a token.
+     * @pre - tokensPlaced >= 0
+     * @post - tokensPlaced == @pre(tokensPlaced) + 1
+     */
     void placeToken(int slotNum) {
         tokensPlaced++;
         table.placeToken(id, slotNum);
@@ -252,6 +258,11 @@ public class Player implements Runnable {
         return id;
     }
 
+    /**
+     * Removes all the player tokens
+     * @post - tokensPlaced == 0
+     *       queue.size() == 0
+     */
     public void removeAllTokens() {
         tokensPlaced = 0;
         queue.clear();

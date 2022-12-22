@@ -61,6 +61,8 @@ public class Dealer implements Runnable {
         return SET_SIZE;
     }
 
+    long lastSecond;
+
     public Dealer(Env env, Table table, Player[] players) {
         this.env = env;
         this.table = table;
@@ -102,7 +104,7 @@ public class Dealer implements Runnable {
     /**
      * The inner loop of the dealer thread that runs as long as the countdown did not time out.
      */
-    long lastSecond;
+
     private void timerLoop() {
         while (!terminate && System.currentTimeMillis() < reshuffleTime + TIMER_OFFSET) { // set reshuffleTime = 60sec
             if(milliseconds != turnTimeout) {
@@ -242,6 +244,7 @@ public class Dealer implements Runnable {
 
     /**
      * Check who is/are the winner/s and displays them.
+     * return score for testing purpose
      */
      int announceWinners() {
         Optional<Player> winner = Arrays.stream(players).max(Comparator.comparingInt(Player::score));
@@ -253,6 +256,17 @@ public class Dealer implements Runnable {
         }
         return 0;
     }
+
+    /**
+     * Add to the submissionQ the if the player who submitted a set
+     * @pre -
+     *      submissionQ.size() < submissionQ.capacity()
+     * @post -
+     *      submissionQ.size() == @pre(submissionQ.size()) + 1
+     *
+     * @param playerIdSubmitted < players.length
+     *        playerIdSubmitted >= 0
+     */
 
     public void submitedSet(int playerIdSubmitted) {
         submissionQ.add(playerIdSubmitted);
